@@ -15,7 +15,7 @@
 import marimo
 
 __generated_with = "0.25.2"
-app = marimo.App(width="medium", layout_file="layouts/notebook.slides.json")
+app = marimo.App(width="medium")
 
 
 @app.cell(hide_code=True)
@@ -85,7 +85,6 @@ def overview(
             tour,
         ]
     )
-
     return
 
 
@@ -133,6 +132,23 @@ def imports():
 
 
 @app.cell(hide_code=True)
+def helpers(mo):
+    import os
+
+    # export.sh sets AIDS_EXPAND=1, so the PDF and ipynb show every "Go deeper" box opened.
+    EXPAND_DETAILS = os.environ.get("AIDS_EXPAND") == "1"
+
+
+    def deeper(items):
+        """Folded boxes (mo.accordion) in the live notebook; open sections in static exports."""
+        if not EXPAND_DETAILS:
+            return mo.accordion(items)
+        return mo.vstack([part for title, body in items.items() for part in (mo.md(f"#### {title}"), body)])
+
+    return (deeper,)
+
+
+@app.cell(hide_code=True)
 def data_intro(mo):
     mo.md(r"""
     ## Part 0 · The data
@@ -140,7 +156,7 @@ def data_intro(mo):
     The file has one row for each of the 118 elements. We use these 8 numeric features:
 
     | Feature | Unit | Meaning |
-    |---|---|---|
+    |:---|:---|:---|
     | AtomicMass | u | mass of one atom |
     | Electronegativity | Pauling scale | how strongly the atom pulls shared electrons |
     | AtomicRadius | pm | size of the atom |
@@ -210,7 +226,6 @@ def missing_values(df, mo, pd, plt):
             ),
         ]
     )
-
     return (FEATURES,)
 
 
@@ -220,7 +235,7 @@ def data_decisions(mo):
     ### What we do with each problem
 
     | Problem | What we do | Why |
-    |---|---|---|
+    |:---|:---|:---|
     | `YearDiscovered` = "Ancient" | Set a flag `DiscoveredAncient = True`. Leave the year empty. | "Ancient" is a fact (the element was known in old times). It is not a missing value. |
     | `StandardState` = "Expected to be a Solid" | Keep "Solid". Set a flag `StatePredicted = True`. | The state of a man-made element is a prediction, not a measurement. |
     | Elements 100–118 (Fm–Og) | Remove them. | Only 1 to 4 of the 8 features are known. Filling in the rest would invent the element. |
@@ -260,7 +275,6 @@ def table_position():
     assert periodic_position(57) == (6, 3) and periodic_position(58) == (9, 4)
     assert periodic_position(71) == (9, 17) and periodic_position(72) == (6, 4)
     assert periodic_position(86) == (6, 18) and periodic_position(103) == (10, 17)
-
     return (periodic_position,)
 
 
@@ -302,18 +316,26 @@ def clean_categoricals(df, fetch_table, mo, pd, periodic_position):
                 f"- `StandardState` after cleaning: `{clean['StandardState'].value_counts().to_dict()}`\n"
                 f"- Our period and group for every element match the **mendeleev** library."
             ),
-            clean[
-                ["AtomicNumber", "Symbol", "YearDiscovered", "DiscoveredAncient", "StandardState",
-                 "StatePredicted", "GroupBlock", "Block", "Period", "Group"]
+            mo.md("**The rows we changed** (ancient or predicted state):"),
+            clean.loc[
+                clean["DiscoveredAncient"] | clean["StatePredicted"],
+                ["Symbol", "YearDiscovered", "DiscoveredAncient", "StandardState", "StatePredicted", "Block", "Period", "Group"],
             ],
         ]
     )
-
     return (clean,)
 
 
 @app.cell
-def handle_missing(FEATURES, KNNImputer, StandardScaler, clean, mo, pd):
+def handle_missing(
+    FEATURES,
+    KNNImputer,
+    StandardScaler,
+    clean,
+    deeper,
+    mo,
+    pd,
+):
     MIN_OBSERVED = 5  # keep an element only if at least 5 of the 8 features are measured
 
     _n_observed = clean[FEATURES].notna().sum(axis=1)
@@ -346,15 +368,14 @@ def handle_missing(FEATURES, KNNImputer, StandardScaler, clean, mo, pd):
                 f"- Set electron affinity to 0 for {len(ea_set_zero)} elements: {', '.join(ea_set_zero)}.\n"
                 f"- Filled **{int(imputed_mask.to_numpy().sum())}** other blanks with KNN."
             ),
-            mo.accordion({"Show the filled-in values": X.where(imputed_mask).dropna(how="all").round(3)}),
+            deeper({"Show the filled-in values": X.where(imputed_mask).dropna(how="all").round(3)}),
         ]
     )
-
     return X, dropped_symbols, ea_set_zero, elements, imputed_mask
 
 
 @app.cell(hide_code=True)
-def impute_check(X, ea_set_zero, fetch_table, imputed_mask, mo, pd):
+def impute_check(X, deeper, ea_set_zero, fetch_table, imputed_mask, mo, pd):
     # How good are the filled-in values? Compare them with the mendeleev reference library.
     _el = fetch_table("elements")
     _bp = fetch_table("phasetransitions").groupby("atomic_number")["boiling_point"].max()
@@ -401,19 +422,15 @@ def impute_check(X, ea_set_zero, fetch_table, imputed_mask, mo, pd):
     mendeleev also lists a **negative** electron affinity for {', '.join(_negative_ea)}. A negative value means the atom does not hold the extra electron. This supports our choice of 0 for these elements.
     """
             ),
-            mo.accordion({"Show the comparison": imputation_check.round(3)}),
+            deeper({"Show the comparison": imputation_check.round(3)}),
         ]
     )
-
     return
 
 
 @app.cell(hide_code=True)
 def q1_intro(mo):
-    mo.vstack(
-        [
-            mo.md(
-                r"""
+    mo.md(r"""
     ## Q1 · Which features matter most?
 
     ### The idea in plain words
@@ -425,9 +442,14 @@ def q1_intro(mo):
     If a feature has small weights in all the important directions, it adds little. We can remove it and lose almost nothing.
 
     ### The method of Song, Guo & Mei (2010)
-    """
-            ),
-            mo.mermaid(
+    """)
+
+    return
+
+
+@app.cell(hide_code=True)
+def q1_diagram(mo):
+    mo.mermaid(
                 """
     graph LR
       A["8 features<br/>(rescaled)"] --> B["covariance<br/>matrix"]
@@ -436,9 +458,14 @@ def q1_intro(mo):
       D --> E["score each feature<br/>c_j = Σ |V_pj|"]
       E --> F["sort →<br/>ranking"]
     """
-            ),
-            mo.md(
-                r"""
+            )
+
+    return
+
+
+@app.cell(hide_code=True)
+def q1_method(mo):
+    mo.md(r"""
     1. Compute the covariance matrix of the data. Find its eigenvectors (directions) and eigenvalues (how much variation each direction holds).
     2. Keep the $m$ eigenvectors with the largest eigenvalues: $V_1, \dots, V_m$.
     3. Give each feature $j$ a score: the sum of its absolute weights in these directions,
@@ -450,11 +477,7 @@ def q1_intro(mo):
     *Reference: F. Song, Z. Guo, D. Mei, "Feature selection using principal component analysis", ICSEM 2010, pp. 27–30, doi:10.1109/ICSEM.2010.14.*
 
     **Two choices we must make.** The paper does not say how to pick $m$. We use the Kaiser rule: keep directions with eigenvalue > 1. The paper also does not rescale the data. Our features have very different units, so we rescale them first (we show why in a "Go deeper" box below).
-    """
-            ),
-        ]
-    )
-
+    """)
     return
 
 
@@ -471,12 +494,11 @@ def q1_guess(FEATURES, SortableList, mo):
             guess,
         ]
     )
-
     return (guess,)
 
 
 @app.cell
-def q1_pca(FEATURES, PCA, StandardScaler, X, mo, np, pd):
+def q1_pca(FEATURES, PCA, StandardScaler, X, deeper, np, pd):
     X_std = StandardScaler().fit_transform(X)
 
     # Step 1: covariance matrix of the rescaled data and all eigenpairs (written out, not a black box).
@@ -495,7 +517,7 @@ def q1_pca(FEATURES, PCA, StandardScaler, X, mo, np, pd):
     m_kaiser = int((eigenvalues > 1).sum())
     m_90 = int(np.searchsorted(np.cumsum(explained), 0.90) + 1)
 
-    mo.accordion(
+    deeper(
         {
             "Show the eigenvalue table": pd.DataFrame(
                 {
@@ -507,7 +529,6 @@ def q1_pca(FEATURES, PCA, StandardScaler, X, mo, np, pd):
             ).round(3)
         }
     )
-
     return X_std, eigenvalues, eigenvectors, explained, m_kaiser
 
 
@@ -555,7 +576,6 @@ def q1_scree(
             _fig,
         ]
     )
-
     return
 
 
@@ -575,16 +595,13 @@ def q1_funcs(FEATURES, TangleSlider, m_kaiser, mo, np, pd):
     m_tangle = mo.ui.anywidget(
         TangleSlider(amount=m_kaiser, min_value=1, max_value=len(FEATURES), step=1, digits=0)
     )
-    mo.md(
-        f"""
-    ### Score the features
-
-    Use the top **{m_tangle}** PCA directions to score the features.
-
-    <small>Drag the blue number left or right to change m (1 to {len(FEATURES)}). All charts below update.</small>
-    """
+    mo.vstack(
+        [
+            mo.md("### Score the features"),
+            mo.md(f"Use the top {m_tangle} PCA directions to score the features."),
+            mo.md(f"<small>Drag the blue number left or right to change m (1 to {len(FEATURES)}). All charts below update.</small>"),
+        ]
     )
-
     return m_tangle, pca_feature_scores, rank_features
 
 
@@ -592,6 +609,7 @@ def q1_funcs(FEATURES, TangleSlider, m_kaiser, mo, np, pd):
 def q1_rank(
     FEATURES,
     alt,
+    deeper,
     eigenvalues,
     eigenvectors,
     explained,
@@ -624,7 +642,7 @@ def q1_rank(
         .reset_index(names="feature")
         .melt(id_vars="feature", var_name="direction", value_name="abs_weight")
     )
-    _chart = (
+    score_chart = (
         alt.Chart(_parts)
         .mark_bar()
         .encode(
@@ -647,11 +665,10 @@ def q1_rank(
                 "Each bar is the score of one feature. The coloured pieces show how much each direction adds. "
                 "**Hover** over a piece to see the number. Longest bar = most important feature."
             ),
-            _chart,
-            mo.accordion({"Show the scores as a table": ranking.round(3)}),
+            score_chart,
+            deeper({"Show the scores as a table": ranking.round(3)}),
         ]
     )
-
     return n_directions, ranking
 
 
@@ -684,13 +701,13 @@ def q1_guess_check(FEATURES, guess, mo, pd, ranking):
             ]
         )
     _out
-
     return
 
 
 @app.cell
 def q1_by_m(
     FEATURES,
+    deeper,
     eigenvectors,
     explained,
     mo,
@@ -717,7 +734,7 @@ def q1_by_m(
     _ax.set_title("Rank of each feature for every m (1 = most important)")
     _fig.tight_layout()
 
-    mo.accordion(
+    deeper(
         {
             "Go deeper · Does the ranking change with m?": mo.vstack(
                 [
@@ -731,7 +748,6 @@ def q1_by_m(
             )
         }
     )
-
     return
 
 
@@ -739,6 +755,7 @@ def q1_by_m(
 def q1_boot(
     FEATURES,
     X,
+    deeper,
     mo,
     n_directions,
     np,
@@ -782,7 +799,7 @@ def q1_boot(
     _ax.set_title(f"How stable is the ranking? (m = {n_directions})")
     _fig.tight_layout()
 
-    mo.accordion(
+    deeper(
         {
             "Go deeper · Is the ranking stable? (bootstrap)": mo.vstack(
                 [
@@ -796,7 +813,6 @@ def q1_boot(
             )
         }
     )
-
     return (bootstrap_ranks,)
 
 
@@ -804,6 +820,7 @@ def q1_boot(
 def q1_raw(
     FEATURES,
     X,
+    deeper,
     mo,
     n_directions,
     np,
@@ -831,7 +848,7 @@ def q1_raw(
     ).sort_values("rank raw")
 
     _top_pc1 = raw_ranking["|V1| raw"].nlargest(2)
-    mo.accordion(
+    deeper(
         {
             "Go deeper · Why we rescale the data first": mo.vstack(
                 [
@@ -846,7 +863,6 @@ def q1_raw(
             )
         }
     )
-
     return
 
 
@@ -855,6 +871,7 @@ def q1_validate(
     FEATURES,
     LinearRegression,
     X_std,
+    deeper,
     itertools,
     mo,
     n_directions,
@@ -895,7 +912,7 @@ def q1_validate(
     _ax.legend()
     _fig.tight_layout()
 
-    mo.accordion(
+    deeper(
         {
             "Go deeper · Do the top features keep the information?": mo.vstack(
                 [
@@ -909,7 +926,6 @@ def q1_validate(
             )
         }
     )
-
     return (reconstruction_r2,)
 
 
@@ -965,7 +981,6 @@ def q1_conclusion(
         ),
         kind="success",
     )
-
     return
 
 
@@ -994,7 +1009,6 @@ def q2_intro(mo):
             ),
         ]
     )
-
     return
 
 
@@ -1003,6 +1017,7 @@ def q2_sweep(
     KMeans,
     X_std,
     adjusted_rand_score,
+    deeper,
     elements,
     mo,
     normalized_mutual_info_score,
@@ -1036,7 +1051,7 @@ def q2_sweep(
     _ax2.legend()
     _fig.tight_layout()
 
-    mo.accordion(
+    deeper(
         {
             "How we picked k": mo.vstack(
                 [
@@ -1051,7 +1066,6 @@ def q2_sweep(
             )
         }
     )
-
     return (k_sweep,)
 
 
@@ -1061,25 +1075,23 @@ def q2_slider(TangleSlider, k_sweep, mo):
     k_tangle = mo.ui.anywidget(TangleSlider(amount=K_DEFAULT, min_value=2, max_value=10, step=1, digits=0))
 
     _s = k_sweep["silhouette"]
-    mo.md(
-        f"""
-    ### Make the clusters
-
-    Split the elements into **{k_tangle}** clusters.
-
-    <small>Drag the blue number (2 to 10). Everything below updates.</small>
-
-    **Why {K_DEFAULT}?** k = 2 has the best silhouette ({_s[2]:.2f}), but it only cuts the elements into two big halves. That is too rough to compare with the table.
-    For k ≥ 3, the silhouette is highest at k = {K_DEFAULT} ({_s[K_DEFAULT]:.2f}), and the elbow plot bends there.
-    The match with the chemical families also grows from ARI {k_sweep.loc[2, 'ARI vs GroupBlock']:.2f} (k = 2) to {k_sweep.loc[K_DEFAULT, 'ARI vs GroupBlock']:.2f} (k = {K_DEFAULT}).
-    """
+    mo.vstack(
+        [
+            mo.md("### Make the clusters"),
+            mo.md(f"Split the elements into {k_tangle} clusters."),
+            mo.md("<small>Drag the blue number (2 to 10). Everything below updates.</small>"),
+            mo.md(
+                f"**Why {K_DEFAULT}?** k = 2 has the best silhouette ({_s[2]:.2f}), but it only cuts the elements into two big halves. That is too rough to compare with the table. "
+                f"For k ≥ 3, the silhouette is highest at k = {K_DEFAULT} ({_s[K_DEFAULT]:.2f}), and the elbow plot bends there. "
+                f"The match with the chemical families also grows from ARI {k_sweep.loc[2, 'ARI vs GroupBlock']:.2f} (k = 2) to {k_sweep.loc[K_DEFAULT, 'ARI vs GroupBlock']:.2f} (k = {K_DEFAULT})."
+            ),
+        ]
     )
-
     return K_DEFAULT, k_tangle
 
 
 @app.cell
-def q2_fit(KMeans, X, X_std, elements, k_tangle, mo, np, pd):
+def q2_fit(KMeans, X, X_std, deeper, elements, k_tangle, mo, np, pd):
     n_clusters = int(k_tangle.value["amount"])
     _raw_labels = KMeans(n_clusters=n_clusters, n_init=50, random_state=0).fit_predict(X_std)
 
@@ -1104,10 +1116,9 @@ def q2_fit(KMeans, X, X_std, elements, k_tangle, mo, np, pd):
     mo.vstack(
         [
             cluster_profile[["name", "size", "members"]],
-            mo.accordion({"Show the average features of each cluster": cluster_profile.drop(columns=["name", "members"])}),
+            deeper({"Show the average features of each cluster": cluster_profile.drop(columns=["name", "members"]).T.rename(columns=lambda k: f"C{k}")}),
         ]
     )
-
     return CLUSTER_COLORS, cluster_names, clustered, labels, n_clusters
 
 
@@ -1152,21 +1163,19 @@ def q2_table(
         .add_params(_pick)
     )
     _symbols = _base.mark_text(fontSize=12, fontWeight="bold").encode(text="Symbol:N")
-    periodic_chart = mo.ui.altair_chart(
-        (_tiles + _symbols).properties(
-            width=760,
-            height=430,
-            title=f"k-means clusters (k = {n_clusters}) on the periodic table. k-means never saw the positions.",
-        )
+    table_chart = (_tiles + _symbols).properties(
+        width=760,
+        height=430,
+        title=f"k-means clusters (k = {n_clusters}) on the periodic table. k-means never saw the positions.",
     )
+    periodic_chart = mo.ui.altair_chart(table_chart)
     mo.vstack(
         [
             mo.md("**Click** an element to light up its cluster (click empty space to reset). **Hover** to see its data. Rows 9–10 are the lanthanides and actinides."),
             periodic_chart,
         ]
     )
-
-    return (periodic_chart,)
+    return periodic_chart, table_chart
 
 
 @app.cell(hide_code=True)
@@ -1187,7 +1196,7 @@ def q2_table_pick(
     _name = next(iter(_names)) if len(_names) == 1 else None
 
     if _name is None or _name not in cluster_names.values():
-        _out = mo.callout(mo.md("Click an element in the table above. Its cluster's “fingerprint” appears here."), kind="info")
+        _out = mo.callout(mo.md("Click an element in the table above to see the fingerprint of its cluster here."), kind="info")
     else:
         _k = next(k for k, v in cluster_names.items() if v == _name)
         _members = clustered.loc[clustered["Cluster"] == _k, "Symbol"]
@@ -1215,7 +1224,6 @@ def q2_table_pick(
             ]
         )
     _out
-
     return
 
 
@@ -1247,7 +1255,6 @@ def q2_parallel(
             parallel,
         ]
     )
-
     return
 
 
@@ -1289,12 +1296,11 @@ def q2_families(
             ),
         ]
     )
-
     return (cluster_agreement,)
 
 
 @app.cell
-def q2_adjacency(clustered, labels, mo, np, pd, plt):
+def q2_adjacency(clustered, deeper, labels, mo, np, pd, plt):
     def touching_pairs(table):
         """Pairs of rows of `table` whose elements touch in the printed periodic table (left-right or up-down)."""
         index_at = {(r, c): i for i, (r, c) in enumerate(zip(table["Row"], table["Column"]))}
@@ -1362,7 +1368,7 @@ def q2_adjacency(clustered, labels, mo, np, pd, plt):
                 ],
                 widths="equal",
             ),
-            mo.accordion(
+            deeper(
                 {
                     "Go deeper · the full test (up–down vs left–right)": mo.vstack(
                         [
@@ -1375,7 +1381,6 @@ def q2_adjacency(clustered, labels, mo, np, pd, plt):
             ),
         ]
     )
-
     return (
         adjacency_test,
         neighbor_pairs,
@@ -1415,6 +1420,7 @@ def q2_pca_view(
     )
     _points = _base.mark_circle(size=140, opacity=0.8).encode(color=_color)
     _labels = _base.mark_text(dx=9, align="left", fontSize=9).encode(text="Symbol:N")
+    pca_map = (_points + _labels).properties(width=720, height=480).interactive()
 
     mo.vstack(
         [
@@ -1423,10 +1429,9 @@ def q2_pca_view(
                 "This links Q1 and Q2. Each dot is an element, placed by the first two PCA directions from Q1. "
                 "The clusters form separate areas of the map. **Scroll to zoom, drag to pan.**"
             ),
-            (_points + _labels).properties(width=720, height=480).interactive(),
+            pca_map,
         ]
     )
-
     return
 
 
@@ -1442,6 +1447,7 @@ def q2_robust(
     adjusted_rand_score,
     clean,
     clustered,
+    deeper,
     elements,
     labels,
     mo,
@@ -1510,7 +1516,7 @@ def q2_robust(
     )
     robustness = pd.DataFrame(_rows).set_index("variant")
 
-    mo.accordion(
+    deeper(
         {
             "Go deeper · Does the result depend on how we filled the blanks?": mo.vstack(
                 [
@@ -1525,7 +1531,6 @@ def q2_robust(
             )
         }
     )
-
     return
 
 
@@ -1560,7 +1565,7 @@ def q2_conclusion(
     **The {K_DEFAULT} clusters are areas of the table**
 
     | Cluster | Area of the table | Typical features |
-    |---|---|---|
+    |:---|:---|:---|
     | 1 | Noble gases + H, N, O, P | gases: highest ionization energy, lowest melting point and density |
     | 2 | Light metals and semi-metals: Li, Be, Mg, Sc–Zn, Y, Zr, Pd, Ag, Cd, B, Al, Si, Ga, Ge, As, In, Sn, Sb | middle values |
     | 3 | Middle of the heavy transition metals (Nb–Rh, Hf–Au) + C | highest melting point, boiling point and density |
@@ -1580,7 +1585,6 @@ def q2_conclusion(
         ),
         kind="success",
     )
-
     return
 
 

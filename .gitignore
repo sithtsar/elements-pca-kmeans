@@ -6,3 +6,6 @@ __pycache__/
 .DS_Store
 # course PDFs (copyrighted paper + slides) are not redistributed
 docs/*.pdf
+
+# local agent tooling
+.claude/
