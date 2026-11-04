@@ -1,0 +1,8 @@
+# marimo session cache
+__marimo__/
+# python / tooling
+.venv/
+__pycache__/
+.DS_Store
+# course PDFs (copyrighted paper + slides) are not redistributed
+docs/*.pdf
